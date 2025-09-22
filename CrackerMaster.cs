@@ -1,125 +1,107 @@
-﻿
+﻿// FILE: PasswordCrackerMaster2023/CrackerMaster.cs
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using PasswordCrackerMaster2023.model;
-using PasswordCrackerMaster2023.util;
+using PasswordCrackerCentralized.util;
+using PasswordCrackerMaster2023.model; // <-- korrekt model
+using PasswordCrackerMaster2023.util;  // <-- korrekt util
 
 namespace PasswordCrackerMaster2023
-   
-
 {
     public class CrackerMaster
     {
-        //List<String> chunks = new List<string>();
-        BlockingCollection<List<String>> chunks = new BlockingCollection<List<string>>();
+        private readonly BlockingCollection<List<string>> _chunks = new BlockingCollection<List<string>>();
+        private readonly List<UserInfo> _userInfos;
+
         public CrackerMaster()
         {
-            //read the password file
-            List<UserInfo> userInfos =  PasswordFileHandler.ReadPasswordFile("passwords.txt");
-
-            //read the dictionary and create chunks
-
-            CreateChunks("webster-dictionary-reduced.txt");
+            _userInfos = PasswordFileHandler.ReadPasswordFile("passwords.txt");
+            CreateChunks("webster-dictionary.txt", chunkSize: 10000);
+            Console.WriteLine("Chunks ready.");
         }
 
-        internal void Listen(IPAddress loopback, int port)
+        internal void Listen(IPAddress bindAddress, int port)
         {
-            TcpListener server  = new TcpListener(loopback, port);
-
+            TcpListener server = new TcpListener(bindAddress, port);
             server.Start();
+            Console.WriteLine($"Master listening on {bindAddress}:{port}");
 
-            TcpClient client = server.AcceptTcpClient();
-            Stream ns = client.GetStream();
-            StreamReader sr = new StreamReader(ns);
-            StreamWriter sw = new StreamWriter(ns);
-
-            sw.AutoFlush = true;
-
-            String request = sr.ReadLine();
-
-            if(request == "password")
+            while (true)
             {
-                //send passwords list 
-
-               String password = sendPasswords();
-                sw.WriteLine(password);
-
-
-            }else if(request == "chunk")
-            {
-                //send a chunk
-                // String chunk = sendChunk();
-
-
-                 String  chunk =  JsonSerializer.Serialize(getChunk());
-
-                 sw.WriteLine(chunk);
-
-               // var chunk1 = JsonSerializer.Serialize(getChunk());
-
-               // var chunk2 = JsonSerializer.Serialize(getChunk());
-
-               // Console.WriteLine(chunk1);
-              //  Console.WriteLine("---------------------------------------------------------------------");
-              //  Console.WriteLine(chunk2);
+                TcpClient client = server.AcceptTcpClient();
+                Task.Run(() => HandleClient(client));
             }
-
-            Console.WriteLine(request);
-
-            Console.ReadKey();
-
         }
 
-
-        public String sendPasswords()
+        private void HandleClient(TcpClient client)
         {
-            return "mypassword";
+            using (client)
+            using (var ns = client.GetStream())
+            using (var sr = new System.IO.StreamReader(ns, Encoding.UTF8))
+            using (var sw = new System.IO.StreamWriter(ns, Encoding.UTF8) { AutoFlush = true })
+            {
+                try
+                {
+                    string request = sr.ReadLine();
+                    Console.WriteLine("Request: " + request);
+
+                    if (request == "chunk")
+                    {
+                        var chunkObj = GetChunk();
+                        var json = JsonSerializer.Serialize(chunkObj);
+                        Console.WriteLine("Sending chunk size (items): " + chunkObj.Count);
+                        sw.WriteLine(json);
+                    }
+                    else if (request == "passwords")
+                    {
+                        var lines = File.ReadAllLines("passwords.txt");
+                        sw.WriteLine(JsonSerializer.Serialize(lines));
+                    }
+                    else
+                    {
+                        sw.WriteLine("unknown");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("HandleClient error: " + e.Message);
+                }
+            }
         }
 
-        public List<String> getChunk()
+        private List<string> GetChunk() => _chunks.Take();
+
+        private void CreateChunks(string filename, int chunkSize)
         {
-            return chunks.Take();
-        }
-
-        private void CreateChunks(string filename)
-        {
-           // List<UserInfoClearText> result = new List<UserInfoClearText>();
-
-            using (FileStream fs = new FileStream("webster-dictionary.txt", FileMode.Open, FileAccess.Read))
-
-            using (StreamReader dictionary = new StreamReader(fs))
+            using (FileStream fs = new FileStream(filename, FileMode.Open, FileAccess.Read))
+            using (var dictionary = new System.IO.StreamReader(fs, Encoding.UTF8))
             {
                 int counter = 0;
-                List<String> words = new List<string>();
+                List<string> words = new List<string>(chunkSize);
 
                 while (!dictionary.EndOfStream)
                 {
-                    String dictionaryEntry = dictionary.ReadLine();
+                    string entry = dictionary.ReadLine();
+                    if (entry == null) continue;
 
+                    words.Add(entry);
                     counter++;
 
-                    if(counter % 10000 != 0)
+                    if (counter % chunkSize == 0)
                     {
-                        words.Add(dictionaryEntry);
-                    }else
-                    {
-                        chunks.Add(words);
-                        words = new List<string>();
+                        _chunks.Add(new List<string>(words));
+                        words.Clear();
                     }
-                    
-                  //  IEnumerable<UserInfoClearText> partialResult = CheckWordWithVariations(dictionaryEntry, userInfos);
-                   // result.AddRange(partialResult);
                 }
 
-                chunks.Add(words);
+                if (words.Count > 0)
+                    _chunks.Add(new List<string>(words));
             }
         }
     }

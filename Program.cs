@@ -7,9 +7,7 @@ namespace PasswordCrackerMaster2023
     {
         static void Main(string[] args)
         {
-
-            CrackerMaster master = new CrackerMaster();
-
+            var master = new CrackerMaster();
             master.Listen(IPAddress.Loopback, 6789);
         }
     }
